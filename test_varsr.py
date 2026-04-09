@@ -81,7 +81,7 @@ def pt_to_numpy(images: torch.Tensor) -> np.ndarray:
 
 logger = get_logger(__name__, log_level="INFO")
 
-def main(args: arg_util.Args):
+def main(args: arg_util.Args, output_tag: str = 'VARPrediction'):
     vae_ckpt =  args.vae_model_path
     var_ckpt = args.var_test_path
     args.depth = 24
@@ -98,13 +98,6 @@ def main(args: arg_util.Args):
     var.load_state_dict(model_state['trainer']['var_wo_ddp'], strict=True)
     vae.eval(), var.eval()
 
-
-    img_preproc = transforms.Compose([
-            transforms.ToTensor(),
-        ])
-                
-
-    image_names = []
     folders = os.listdir("testset/")
     val_set = []
     for folder in folders:
@@ -123,35 +116,37 @@ def main(args: arg_util.Args):
             B = lr_inp.shape[0]
 
             with torch.inference_mode():
-                with torch.autocast('cuda', enabled=True, dtype=torch.float16, cache_enabled=True):    # using bfloat16 can be faster
-                    start_time = time.time()
-                    recon_B3HW = var.autoregressive_infer_cfg(B=B, cfg=6.0, top_k=1, top_p=0.75,
-                                                        text_hidden=None, lr_inp=lr_inp, negative_text=None, label_B=label_B, lr_inp_scale = None,
-                                                        more_smooth=False)
+                with torch.autocast('cuda', enabled=True, dtype=torch.float16, cache_enabled=True):
+                    recon_B3HW = var.autoregressive_infer_cfg(
+                        B=B, cfg=args.cfg, top_k=args.top_k, top_p=args.top_p,
+                        diff_temp=args.diff_temp, g_seed=args.infer_seed,
+                        text_hidden=None, lr_inp=lr_inp, negative_text=None,
+                        label_B=label_B, lr_inp_scale=None, more_smooth=False,
+                    )
                     recon_B3HW = numpy_to_pil(pt_to_numpy(recon_B3HW))
 
             for idx in range(B):
                 image = recon_B3HW[idx]
-                if True: 
-                    validation_image = Image.open(batch['path'][idx].replace("/HR","/LR")).convert("RGB")
+                if args.color_fix != 'none':
+                    validation_image = Image.open(batch['path'][idx].replace("/HR", "/LR")).convert("RGB")
                     validation_image = validation_image.resize((512, 512))
-                    image = adain_color_fix(image, validation_image)
+                    if args.color_fix == 'wavelet':
+                        image = wavelet_color_fix(image, validation_image)
+                    else:
+                        image = adain_color_fix(image, validation_image)
 
                 folder_path, ext_path = os.path.split(batch['path'][idx])
-                output_name = folder_path.replace("/LR", "/VARPrediction/").replace("/HR", "/VARPrediction/")
+                output_name = folder_path.replace("/LR", f"/{output_tag}/").replace("/HR", f"/{output_tag}/")
                 os.makedirs(output_name, exist_ok=True)
                 image.save(os.path.join(output_name, ext_path))
     return True
 
 
-def metrics():
+def metrics(output_tag: str = 'VARPrediction'):
     dir = "testset/"
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    print(pyiqa.list_models())
     folders = os.listdir("testset/")
-    img_preproc = transforms.Compose([
-        transforms.ToTensor(),
-    ])
+    img_preproc = transforms.Compose([transforms.ToTensor()])
 
     psnr_metric = pyiqa.create_metric('psnr', device=device)
     ssim_metric = pyiqa.create_metric('ssim', device=device)
@@ -163,36 +158,30 @@ def metrics():
     dists_iqa_metric = pyiqa.create_metric('dists', device=device)
     niqe_iqa_metric = pyiqa.create_metric('niqe', device=device)
 
+    all_results = {}
     for folder in folders:
-        print(folder)
+        print(f"\n--- {folder} ---")
         gt_img_paths = []
+        gt_img_paths.extend(sorted(glob.glob(f'{dir}/{folder}/HR/*.JPEG')))
+        gt_img_paths.extend(sorted(glob.glob(f'{dir}/{folder}/HR/*.png')))
 
-        psnr_folder = []
-        ssim_folder = []
-        lpips_score = []
-        dists_score = []
-        niqe_score = []
-        lpips_iqa = []
-        musiq_iqa = []
-        maniqa_iqa = []
-        clip_iqa = []
-        gt_img_paths.extend(sorted(glob.glob(f'{dir}/{folder}/HR/*.JPEG'))[:])
-        gt_img_paths.extend(sorted(glob.glob(f'{dir}/{folder}/HR/*.png'))[:])
-        real_image_folder = dir + "/" + folder + "/HR"
-        generated_image_folder = real_image_folder.replace("/HR", "/VARPrediction")
+        real_image_folder = f"{dir}/{folder}/HR"
+        generated_image_folder = real_image_folder.replace("/HR", f"/{output_tag}")
+
+        psnr_folder, ssim_folder, lpips_iqa, musiq_iqa, maniqa_iqa, clip_iqa, dists_score, niqe_score = [], [], [], [], [], [], [], []
 
         for gt_img_path in gt_img_paths:
-            GT_image = img_preproc(Image.open(gt_img_path).convert('RGB'))
-            prediction_img_path = gt_img_path.replace("/HR/", "/VARPrediction/")
-            VARPrediction_img = img_preproc(Image.open(prediction_img_path).convert('RGB'))
+            prediction_img_path = gt_img_path.replace("/HR/", f"/{output_tag}/")
+            if not os.path.exists(prediction_img_path):
+                print(f"  [skip] missing: {prediction_img_path}")
+                continue
 
-            img1 = rgb2ycbcr_pt(img2tensor(io.imread(gt_img_path)),  y_only=True).to(torch.float64)
-            img2 = rgb2ycbcr_pt(img2tensor(io.imread(prediction_img_path)),  y_only=True).to(torch.float64)
-            img1 = torch.squeeze(img1)
-            img2 = torch.squeeze(img2)
-            
-            ssim_folder.append(ssim_metric(img1.unsqueeze(0).unsqueeze(0), img2.unsqueeze(0).unsqueeze(0)))
+            img1 = rgb2ycbcr_pt(img2tensor(io.imread(gt_img_path)), y_only=True).to(torch.float64)
+            img2 = rgb2ycbcr_pt(img2tensor(io.imread(prediction_img_path)), y_only=True).to(torch.float64)
+            img1, img2 = torch.squeeze(img1), torch.squeeze(img2)
+
             psnr_folder.append(psnr_metric(img1.unsqueeze(0).unsqueeze(0), img2.unsqueeze(0).unsqueeze(0)))
+            ssim_folder.append(ssim_metric(img1.unsqueeze(0).unsqueeze(0), img2.unsqueeze(0).unsqueeze(0)))
             lpips_iqa.append(lpips_iqa_metric(prediction_img_path, gt_img_path))
             clip_iqa.append(clipiqa_iqa_metric(prediction_img_path))
             musiq_iqa.append(musiq_iqa_metric(prediction_img_path))
@@ -200,30 +189,43 @@ def metrics():
             dists_score.append(dists_iqa_metric(prediction_img_path, gt_img_path))
             niqe_score.append(niqe_iqa_metric(prediction_img_path))
 
-        m_psnr = sum(psnr_folder) / len(psnr_folder)
-        m_ssim = sum(ssim_folder) / len(ssim_folder)
-        print(f"PSNR = {m_psnr}")
-        print(f"SSIM = {m_ssim}")
-        m_lpips = sum(lpips_iqa)/len(lpips_iqa)
-        print(f"LPIPS = {m_lpips.item()}")
-        m_dists = sum(dists_score)/len(dists_score)
-        print(f"DISTS = {m_dists}")
-        m_niqe = sum(niqe_score)/len(niqe_score)
-        print(f"NIQE = {m_niqe}")
-        clipiqa = sum(clip_iqa)/len(clip_iqa)
-        print(f"CLIP-IQA = {clipiqa.item()}")
-        musiq = sum(musiq_iqa)/len(musiq_iqa)
-        print(f"MUSIQ = {musiq.item()}")
-        maniqa = sum(maniqa_iqa)/len(maniqa_iqa)
-        print(f"MANIQA = {maniqa.item()}")
-        fid_value = fid_metric(real_image_folder, generated_image_folder)
-        print(f"FID = {fid_value}")
+        if not psnr_folder:
+            print("  No predictions found, skipping.")
+            continue
 
-    return (m_psnr.item(), m_ssim.item(), m_lpips.item(), m_dists.item(), clipiqa.item(), musiq.item(), maniqa.item())
+        m_psnr   = (sum(psnr_folder) / len(psnr_folder)).item()
+        m_ssim   = (sum(ssim_folder) / len(ssim_folder)).item()
+        m_lpips  = (sum(lpips_iqa) / len(lpips_iqa)).item()
+        m_dists  = (sum(dists_score) / len(dists_score)).item()
+        m_niqe   = (sum(niqe_score) / len(niqe_score)).item()
+        m_clip   = (sum(clip_iqa) / len(clip_iqa)).item()
+        m_musiq  = (sum(musiq_iqa) / len(musiq_iqa)).item()
+        m_maniqa = (sum(maniqa_iqa) / len(maniqa_iqa)).item()
+        fid_value = fid_metric(real_image_folder, generated_image_folder)
+
+        print(f"  PSNR     = {m_psnr:.4f}")
+        print(f"  SSIM     = {m_ssim:.4f}")
+        print(f"  LPIPS    = {m_lpips:.4f}  (lower=better)")
+        print(f"  DISTS    = {m_dists:.4f}  (lower=better)")
+        print(f"  NIQE     = {m_niqe:.4f}  (lower=better)")
+        print(f"  CLIP-IQA = {m_clip:.4f}")
+        print(f"  MUSIQ    = {m_musiq:.4f}")
+        print(f"  MANIQA   = {m_maniqa:.4f}")
+        print(f"  FID      = {fid_value:.4f}  (lower=better)")
+
+        all_results[folder] = dict(
+            psnr=m_psnr, ssim=m_ssim, lpips=m_lpips, dists=m_dists,
+            niqe=m_niqe, clip_iqa=m_clip, musiq=m_musiq, maniqa=m_maniqa, fid=fid_value,
+        )
+
+    return all_results
 
 
 
 if __name__ == "__main__":
     args: arg_util.Args = arg_util.init_dist_and_get_args()
-    main(args)
-    results = metrics()
+    tag = f"VARPrediction_cfg{args.cfg}_tk{args.top_k}_tp{args.top_p}_dt{args.diff_temp}_{args.color_fix}"
+    print(f"\n[VARSR] output_tag = {tag}")
+    print(f"[VARSR] cfg={args.cfg}  top_k={args.top_k}  top_p={args.top_p}  diff_temp={args.diff_temp}  color_fix={args.color_fix}  seed={args.infer_seed}\n")
+    main(args, output_tag=tag)
+    results = metrics(output_tag=tag)

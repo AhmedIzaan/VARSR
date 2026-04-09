@@ -260,8 +260,8 @@ class VAR_RoPE(nn.Module):
     @torch.no_grad()
     def autoregressive_infer_cfg(
         self, B: int, text_hidden, lr_inp, negative_text, label_B,
-        g_seed: Optional[int] = None, cfg=1.5, top_k=0, top_p=0.0, 
-        more_smooth=False, lr_inp_scale=None, tile_flag=False,
+        g_seed: Optional[int] = None, cfg=1.5, top_k=0, top_p=0.0,
+        diff_temp=1.0, more_smooth=False, lr_inp_scale=None, tile_flag=False,
     ) -> torch.Tensor:   # returns reconstructed image (B, 3, H, W) in [0, 1]
         """
         only used for inference, on autoregressive mode
@@ -340,11 +340,11 @@ class VAR_RoPE(nn.Module):
                     cur_Lr += self.patch_nums[si+1] ** 2
                 next_token_map = next_token_map.repeat(2, 1, 1)   # double the batch sizes due to CFG
         
-        for b in self.blocks: 
+        for b in self.blocks:
             b.attn.kv_caching(False)
 
         final_stage = 0
-        if final_stage == 0:  
+        if final_stage == 0:
             last_stage_discrete_cond = self.vae_quant_proxy[0].embedding(idx_Bl)
             last_stage_discrete_cond = self.word_embed(last_stage_discrete_cond)
             last_stage_discrete_cond = torch.cat([last_stage_discrete_cond, last_stage_discrete_cond], dim=0)
@@ -352,7 +352,7 @@ class VAR_RoPE(nn.Module):
             bs, cur_seq_len, _ = last_stage_cond.shape
             last_stage_cond = last_stage_cond.reshape(bs * cur_seq_len, -1)
             h_BChw_diff = self.diffloss.sample(
-                z=last_stage_cond, temperature=1.0, cfg=t
+                z=last_stage_cond, temperature=diff_temp, cfg=t
             )
             h_BChw_diff = h_BChw_diff.reshape(bs, cur_seq_len, -1)
             h_BChw_diff, _ = h_BChw_diff.chunk(2, dim=0)

@@ -67,6 +67,14 @@ class Args(Tap):
     saln: bool = False      # whether to use shared adaln
     anorm: bool = True      # whether to use L2 normalized attention
     fuse: bool = False       # whether to use fused op like flash attn, xformers, fused MLP, fused LayerNorm, etc.
+
+    # inference hyperparams
+    cfg: float = 6.0          # classifier-free guidance scale
+    top_k: int = 1             # top-k sampling; 1=greedy, 0=disabled
+    top_p: float = 0.75        # nucleus sampling threshold; 0=disabled
+    diff_temp: float = 1.0     # diffusion refinement head temperature; lower=sharper
+    color_fix: str = 'adain'   # post-processing color correction: 'adain' | 'wavelet' | 'none'
+    infer_seed: int = None     # fixed seed for reproducible inference; None=random
     
     # data
     pn: str = '1_2_3_4_6_9_13_18_24_32'
