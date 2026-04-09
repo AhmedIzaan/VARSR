@@ -86,9 +86,11 @@ def main(args: arg_util.Args, output_tag: str = 'VARPrediction'):
     var_ckpt = args.var_test_path
     args.depth = 24
 
+    # Build on CPU, load weights, then move to GPU — avoids NVRTC kernel
+    # compilation during init_weights which can fail on some CUDA environments.
     vae, var = build_var(
         V=4096, Cvae=32, ch=160, share_quant_resi=4, controlnet_depth=args.depth,        # hard-coded VQVAE hyperparameters
-        device=dist.get_device(), patch_nums=args.patch_nums, control_patch_nums =args.patch_nums,
+        device='cpu', patch_nums=args.patch_nums, control_patch_nums=args.patch_nums,
         num_classes=1 + 1, depth=args.depth, shared_aln=args.saln, attn_l2_norm=args.anorm,
         flash_if_available=args.fuse, fused_if_available=args.fuse,
         init_adaln=args.aln, init_adaln_gamma=args.alng, init_head=args.hd, init_std=args.ini,
@@ -96,7 +98,9 @@ def main(args: arg_util.Args, output_tag: str = 'VARPrediction'):
     vae.load_state_dict(torch.load(vae_ckpt, map_location='cpu')['trainer']['vae_local'], strict=True)
     model_state = torch.load(var_ckpt, map_location='cpu')
     var.load_state_dict(model_state['trainer']['var_wo_ddp'], strict=True)
-    vae.eval(), var.eval()
+    device = dist.get_device()
+    vae.to(device).eval()
+    var.to(device).eval()
 
     folders = os.listdir("testset/")
     val_set = []

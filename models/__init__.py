@@ -25,8 +25,10 @@ def build_var(
     for clz in (nn.Linear, nn.LayerNorm, nn.BatchNorm2d, nn.SyncBatchNorm, nn.Conv1d, nn.Conv2d, nn.ConvTranspose1d, nn.ConvTranspose2d):
         setattr(clz, 'reset_parameters', lambda self: None)
     
-    # build models
-    vae_local = VQVAE(vocab_size=V, z_channels=Cvae, ch=ch, test_mode=True, share_quant_resi=share_quant_resi, v_patch_nums=patch_nums).to(device)
+    # build models on CPU first — init_weights runs trunc_normal_ which triggers
+    # NVRTC kernel compilation on GPU; since load_state_dict overwrites all weights
+    # anyway, we skip init_weights entirely for inference and move to device after.
+    vae_local = VQVAE(vocab_size=V, z_channels=Cvae, ch=ch, test_mode=True, share_quant_resi=share_quant_resi, v_patch_nums=patch_nums)
     var_wo_ddp = VAR_RoPE(
         vae_local=vae_local,
         num_classes=num_classes, depth=depth, controlnet_depth=controlnet_depth, embed_dim=width, num_heads=heads, drop_rate=0., attn_drop_rate=0., drop_path_rate=dpr,
@@ -34,8 +36,9 @@ def build_var(
         attn_l2_norm=attn_l2_norm,
         patch_nums=patch_nums,
         flash_if_available=flash_if_available, fused_if_available=fused_if_available,
-    ).to(device)
-    var_wo_ddp.init_weights(init_adaln=init_adaln, init_adaln_gamma=init_adaln_gamma, init_head=init_head, init_std=init_std)
+    )
+    # weights are loaded from checkpoint immediately after build_var() returns,
+    # so init_weights is skipped here — it would be overwritten anyway.
 
     return vae_local, var_wo_ddp
 
