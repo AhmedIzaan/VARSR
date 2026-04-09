@@ -128,7 +128,7 @@ def main(args: arg_util.Args, output_tag: str = 'VARPrediction'):
             for idx in range(B):
                 image = recon_B3HW[idx]
                 if args.color_fix != 'none':
-                    validation_image = Image.open(batch['path'][idx].replace("/HR", "/LR")).convert("RGB")
+                    validation_image = Image.open(batch['path'][idx].replace("/HR/", "/LR/").replace("_HR.png", "_LR4.png")).convert("RGB")
                     validation_image = validation_image.resize((512, 512))
                     if args.color_fix == 'wavelet':
                         image = wavelet_color_fix(image, validation_image)

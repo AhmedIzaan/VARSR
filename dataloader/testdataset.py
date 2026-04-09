@@ -60,7 +60,7 @@ class TestDataset(data.Dataset):
         example["pixel_values"] = GT_image_t.squeeze(0) * 2.0 - 1.0
         example['path'] = img_path
 
-        img_path = self.img_paths[index].replace("/HR/", "/LR/")
+        img_path = self.img_paths[index].replace("/HR/", "/LR/").replace("_HR.png", "_LR4.png")
         LR_image_t = Image.open(img_path).convert('RGB')
         if LR_image_t.size[-1] != resolution:
             example["conditioning_pixel_values"] = self.img_preproc(LR_image_t.resize((resolution, resolution))).squeeze(0) * 2.0 - 1.0
@@ -68,7 +68,6 @@ class TestDataset(data.Dataset):
             example["conditioning_pixel_values"] = self.img_preproc(LR_image_t).squeeze(0) * 2.0 - 1.0
 
         example["label_B"] = 0
-        fp.close()
     
         return example
 
