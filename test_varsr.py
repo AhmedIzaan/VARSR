@@ -180,17 +180,31 @@ def metrics(output_tag: str = 'VARPrediction'):
                 print(f"  [skip] missing: {prediction_img_path}")
                 continue
 
-            img1 = rgb2ycbcr_pt(img2tensor(io.imread(gt_img_path)), y_only=True).to(torch.float64)
+            # Get prediction size and resize GT to match — model outputs 512×512
+            # but original HR images may be at full camera resolution (e.g. 1000×1400)
+            pred_img = Image.open(prediction_img_path).convert('RGB')
+            pred_w, pred_h = pred_img.size
+
+            gt_raw = io.imread(gt_img_path)
+            if gt_raw.shape[1] != pred_w or gt_raw.shape[0] != pred_h:
+                gt_raw = np.array(Image.fromarray(gt_raw).resize((pred_w, pred_h), Image.BICUBIC))
+
+            # Save resized GT to a temp path for metrics that take file paths
+            gt_resized_path = gt_img_path.replace("/HR/", f"/{output_tag}_gtresized/")
+            os.makedirs(os.path.dirname(gt_resized_path), exist_ok=True)
+            Image.fromarray(gt_raw).save(gt_resized_path)
+
+            img1 = rgb2ycbcr_pt(img2tensor(gt_raw), y_only=True).to(torch.float64)
             img2 = rgb2ycbcr_pt(img2tensor(io.imread(prediction_img_path)), y_only=True).to(torch.float64)
             img1, img2 = torch.squeeze(img1), torch.squeeze(img2)
 
             psnr_folder.append(psnr_metric(img1.unsqueeze(0).unsqueeze(0), img2.unsqueeze(0).unsqueeze(0)))
             ssim_folder.append(ssim_metric(img1.unsqueeze(0).unsqueeze(0), img2.unsqueeze(0).unsqueeze(0)))
-            lpips_iqa.append(lpips_iqa_metric(prediction_img_path, gt_img_path))
+            lpips_iqa.append(lpips_iqa_metric(prediction_img_path, gt_resized_path))
             clip_iqa.append(clipiqa_iqa_metric(prediction_img_path))
             musiq_iqa.append(musiq_iqa_metric(prediction_img_path))
             maniqa_iqa.append(maniqa_metric(prediction_img_path))
-            dists_score.append(dists_iqa_metric(prediction_img_path, gt_img_path))
+            dists_score.append(dists_iqa_metric(prediction_img_path, gt_resized_path))
             niqe_score.append(niqe_iqa_metric(prediction_img_path))
 
         if not psnr_folder:
